@@ -31,6 +31,11 @@ COLORS = [[85.0, 0.0, 255.0], [0.0, 0.0, 255.0], [0.0, 85.0, 255.0], [0.0, 170.0
 if __name__ == "__main__":
     """
     Parse raw result from Openpose to our format
+    Output: dict of following elements
+        X: Input data (N, 18, 3)
+        Y: Output data (N,)
+        S: Scales (N,)
+        names: image names (e.g. af001)
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--score_threshold', type=float, default=0.05)
@@ -42,7 +47,7 @@ if __name__ == "__main__":
     if not os.path.exists(vis_dir):
         os.makedirs(vis_dir)
 
-    X, Y, S = [], [], []
+    X, Y, S, names = [], [], [], []
     for input_path in sorted(glob.glob(os.path.join(data_dir, "*.json"))):
         with open(input_path, "r") as f:
             data = json.load(f)
@@ -50,6 +55,9 @@ if __name__ == "__main__":
         raw_poses = [person["pose_keypoints"] for person in data["people"]]
 
         poses = np.array([list(chunked(x, 3)) for x in raw_poses])[0]
+        if sum(poses[[1, 8, 11, 4, 7], 2] == 0) > 0:
+            continue
+
         spine = (poses[8:9, :2] + poses[11:12, :2]) / 2
         neck = poses[1:2, :2]
         sizes = np.linalg.norm(neck - spine, axis=1)  # (N, T, 1)
@@ -60,8 +68,9 @@ if __name__ == "__main__":
         pid = int(os.path.basename(input_path).split("_")[0][-3:])
 
         X.append(poses)
-        Y.append((pid % 5) * 0.25)
+        Y.append(((pid - 1) % 5) * 0.25)
         S.append(sizes[0])
+        names.append(os.path.basename(input_path).split("_")[0])
 
         impath = os.path.join("minipose", os.path.basename(input_path).split("_")[0]+".jpg")
         img = cv2.imread(impath)
@@ -86,6 +95,6 @@ if __name__ == "__main__":
         cv2.imwrite(out_fn, cv2.resize(result_img, None, fx=0.5, fy=0.5))
 
     with open("data.pkl", "w") as f:
-        pickle.dump({"X": X, "Y": Y, "S": S}, f)
+        pickle.dump({"X": X, "Y": Y, "S": S, "names": names}, f)
     print(np.array(X).shape)
     print("Completed. Elapsed time: {} (s)".format(time.time()-start))
