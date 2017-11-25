@@ -15,6 +15,7 @@ import argparse
 import json
 import time
 import glob
+import cPickle as pickle
 
 from functools import partial
 from more_itertools import chunked
@@ -32,57 +33,42 @@ if __name__ == "__main__":
     Parse raw result from Openpose to our format
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument('--indir', type=str, required=True)
-    parser.add_argument('--imdir_name', type=str, default="images")
+    parser.add_argument('--score_threshold', type=float, default=0.05)
     parser.add_argument('--debug', action="store_true")
     args = parser.parse_args()
-
     start = time.time()
-
-    video_id = os.path.basename(args.indir)
-    data_dir = os.getenv("TRAJ_DATA_DIR")
-    indir = os.path.join(data_dir, "videos", video_id)
-    homography_path = os.path.join(data_dir, "homography/{}_homography.json".format(video_id))
-    with open(homography_path, "r") as f:
-        pose_dict = json.load(f)
-
-    pose_path = os.path.join(data_dir, "pose/{}_pose.json".format(video_id))
-    pose_dir = os.path.join(indir, "poses")
-    vis_dir = os.path.join(indir, "images_pose_filtered")
+    data_dir = "minipose_annotation"
+    vis_dir = "plots"
     if not os.path.exists(vis_dir):
         os.makedirs(vis_dir)
 
-    print(pose_dir)
-    for input_path in sorted(glob.glob(os.path.join(pose_dir, "*.json"))):
-        key = "rgb_{}.jpg".format(os.path.basename(input_path).split("_")[1])
-        if key not in pose_dict:
-            continue
-
+    X, Y, S = [], [], []
+    for input_path in sorted(glob.glob(os.path.join(data_dir, "*.json"))):
         with open(input_path, "r") as f:
             data = json.load(f)
 
         raw_poses = [person["pose_keypoints"] for person in data["people"]]
-        inside_bb_partial = partial(inside_bb, pose_dict[key], args.bb_threshold, args.score_threshold)
 
-        pose_assign = filter(lambda x: x[0] is True, map(inside_bb_partial, raw_poses))
-        poses = [list(chunked(x[1], 3)) for x in pose_assign]
+        poses = np.array([list(chunked(x, 3)) for x in raw_poses])[0]
+        spine = (poses[8:9, :2] + poses[11:12, :2]) / 2
+        neck = poses[1:2, :2]
+        sizes = np.linalg.norm(neck - spine, axis=1)  # (N, T, 1)
+        sizes[sizes == 0] = 1e-8  # Avoid ZerodivisionError
+        pose_normalized = (poses[...,:2] - spine) / sizes[:, np.newaxis]  # Normalization
+        poses[..., :2] = pose_normalized
+        # print(poses)
+        pid = int(os.path.basename(input_path).split("_")[0][-3:])
 
-        pose_dict[key]["pose"] = poses
-        frame = int(key[4:9])
-        if frame % 100 == 0:
-            print(key)
+        X.append(poses)
+        Y.append((pid % 5) * 0.25)
+        S.append(sizes[0])
 
-        if not args.debug:
-            continue
-
-        # Debug: draw bb and pose
-        img = cv2.imread(os.path.join(indir, args.imdir_name, key))
-        for x1, y1, x2, y2, s in pose_dict[key]["detected"]:
-            cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2, 16)
+        impath = os.path.join("minipose", os.path.basename(input_path).split("_")[0]+".jpg")
+        img = cv2.imread(impath)
 
         # Draw pose
         canvas = np.zeros_like(img)
-        for ps in poses:
+        for ps in poses[np.newaxis, ...]:
             if ps[1][0] == 0.0 or ps[8][0] == 0.0:
                 continue
             scale = np.sqrt((ps[8][0] - ps[1][0]) ** 2 + (ps[8][1] - ps[1][1]) ** 2)
@@ -96,12 +82,10 @@ if __name__ == "__main__":
 
         result_img = cv2.addWeighted(img, 1.0, canvas, 0.5, 0.0)
 
-        out_fn = os.path.join(vis_dir, key)
+        out_fn = os.path.join(vis_dir, os.path.basename(impath))
         cv2.imwrite(out_fn, cv2.resize(result_img, None, fx=0.5, fy=0.5))
 
-    if not os.path.exists(os.path.dirname(pose_path)):
-        os.makedirs(os.path.dirname(pose_path))
-    with open(pose_path, "w") as f:
-        json.dump(pose_dict, f)
-
+    with open("data.pkl", "w") as f:
+        pickle.dump({"X": X, "Y": Y, "S": S}, f)
+    print(np.array(X).shape)
     print("Completed. Elapsed time: {} (s)".format(time.time()-start))
