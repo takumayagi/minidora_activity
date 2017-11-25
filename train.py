@@ -6,11 +6,17 @@
 #
 # Distributed under terms of the MIT license.
 
+from __future__ import print_function
+from __future__ import division
+from six.moves import range
+
 import os
 import numpy as np
 import cPickle as pickle
 
 import cv2
+
+PART_NAME = ["Nose", "Neck", "RShoulder", "RElbow", "RWrist", "LShoulder", "LElbow", "LWrist", "RHip", "RKnee", "RAnkle", "LHip", "LKnee", "LAnkle", "REye", "LEye", "REar", "LEar", "Background"]
 
 with open("data.pkl") as f:
     data_dict= pickle.load(f)
@@ -44,7 +50,14 @@ for test_pid in np.unique(pids):
             best_lmbda = lmbda
 
     # Pick best score and plot to prediction
+    theta = np.linalg.solve(np.dot(tr_X.T, tr_X) + best_lmbda * np.eye(tr_X.shape[1]), np.dot(tr_X.T, tr_Y))
     print(test_pid, best_lmbda, best_score)
+    curr_idx = 0
+    for name in [x for idx, x in enumerate(PART_NAME) if idx in [2, 3, 4, 5, 6, 7]]:
+        for corr in ["X", "Y"]:
+            print("{} {} {}".format(name, corr, theta[curr_idx]))
+            curr_idx += 1
+
     prediction = np.dot(ts_X, theta)
     for idx, pred, gt in zip(test_idxs, prediction, ts_Y):
         impath = os.path.join("minipose_annotation", "{}_rendered.png".format(names[idx]))
